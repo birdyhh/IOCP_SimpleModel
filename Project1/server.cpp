@@ -1,3 +1,4 @@
+#define _WINSOCK_DEPRECATED_NO_WARNINGS
 #include <winsock2.h>
 #include <windows.h>
 #include <string>
@@ -8,8 +9,98 @@
 
 #define BUF_SIZE 1024
 
+enum class IO_OPERATION
+{
+	IO_READ,IO_WRITE
+};
+
+struct IO_DATA
+{
+	IO_OPERATION opCode;
+	OVERLAPPED OverLapped;
+	SOCKET client;
+	WSABUF wsaBuf;
+	int nBytes;
+};
+
 HANDLE g_hIOCP = 0;
 char g_buffer[BUF_SIZE] = { 0 };
+
+DWORD WINAPI WorkerThread(LPVOID context)
+{
+	while (true)
+	{
+		DWORD dwIoSize = 0;
+		void* lpComletionKey = NULL;
+		LPOVERLAPPED lpOverlapped = NULL;
+		BOOL bRet = GetQueuedCompletionStatus(g_hIOCP, &dwIoSize, (PULONG_PTR)&lpComletionKey, (LPOVERLAPPED*)&lpOverlapped, INFINITE);
+		std::cout << "GetQueuedCompletionStatus() bRet= " << bRet;
+		std::cout << ", dwIoSize = " << dwIoSize<< ", Key = " << lpComletionKey << std::endl;
+		IO_DATA* lpIOContext = CONTAINING_RECORD(lpOverlapped, IO_DATA, OverLapped);
+		if (dwIoSize == 0)
+		{
+			std::cout << "Client disconnected." << std::endl;
+			int nRet = closesocket(lpIOContext->client);
+			std::cout << "closesocket() nRet = " << nRet << "." << std::endl;
+			delete lpIOContext;
+			continue;
+		}
+		std::cout << "dwThreadID" << std::dec << GetCurrentThreadId() << std::endl;
+		std::cout << "opCode = " << std::hex << (int)lpIOContext->opCode << std::endl;
+		if (lpIOContext->opCode == IO_OPERATION::IO_READ)
+		{
+			std::cout << "Client IO_READ" << std::endl;
+			ZeroMemory(&lpIOContext->OverLapped, sizeof(lpIOContext->OverLapped));
+			lpIOContext->wsaBuf.buf = g_buffer;
+			lpIOContext->wsaBuf.len = (ULONG)strlen(g_buffer) + 1;
+			lpIOContext->opCode = IO_OPERATION::IO_WRITE;
+			lpIOContext->nBytes = (int)strlen(g_buffer) + 1;
+			DWORD dwFlags = 0;
+			DWORD nBytes = (DWORD)strlen(g_buffer) + 1;
+			int nRet = WSASend(lpIOContext->client, &lpIOContext->wsaBuf, 1, &nBytes, dwFlags, &(lpIOContext->OverLapped), NULL);
+			if (nRet == SOCKET_ERROR)
+			{
+				int nErr = WSAGetLastError();
+				if (ERROR_IO_PENDING == nErr)
+				{
+					std::cout << "WSASend Failed! nErr = " << nErr << "." << std::endl;
+					nRet = closesocket(lpIOContext->client);
+					std::cout << "closesocket() nRet = " << nRet << std::endl;
+					delete lpIOContext;
+					continue;
+				}
+			}
+			memset(g_buffer, NULL, sizeof(g_buffer));
+		}
+		else if (lpIOContext->opCode == IO_OPERATION::IO_WRITE)
+		{
+			std::cout << "Client IO_WRITE" << std::endl;
+			DWORD dwFlags = 0;
+			DWORD nBytes = sizeof(g_buffer);
+			lpIOContext->opCode = IO_OPERATION::IO_READ;
+			lpIOContext->wsaBuf.buf = g_buffer;
+			lpIOContext->wsaBuf.len = nBytes;
+			lpIOContext->nBytes = nBytes;
+			ZeroMemory(&lpIOContext->OverLapped, sizeof(lpIOContext->OverLapped));
+			int nRet = WSARecv(lpIOContext->client, &lpIOContext->wsaBuf, 1, &nBytes, &dwFlags, &(lpIOContext->OverLapped), NULL);
+			if (nRet == SOCKET_ERROR)
+			{
+				int nErr = WSAGetLastError();
+				if (ERROR_IO_PENDING == nErr)
+				{
+					std::cout << "WSARecv Failed! nErr = " << nErr << "." << std::endl;
+					nRet = closesocket(lpIOContext->client);
+					std::cout << "closesocket() nRet = " << nRet << std::endl;
+					delete lpIOContext;
+					continue;
+				}
+			}
+			std::cout << lpIOContext->wsaBuf.buf << std::endl;
+		}
+	}
+	std::cout << "WordkerThread() end." << std::endl;
+	return 0;
+}
 
 int GetCpuCoreCount()
 {
@@ -65,6 +156,51 @@ int main()
 			//线程的生命周期和线程句柄的生命周期不一样，创建线程后关闭句柄，可以在未来线程结束时及时释放内存资源
 		}
 	}
-
-
+	
+	while (hSocket)
+	{
+		SOCKET hClient = accept(hSocket, NULL, NULL);
+		std::cout << "accept() hClient = " << std::hex << hClient << "." << std::endl;
+		HANDLE hIocpTemp = CreateIoCompletionPort((HANDLE)hClient, g_hIOCP, hClient, 0);
+		std::cout << "ConnectIOCP() hIocpTemp = " << std::hex << hIocpTemp << "." << std::endl;
+		if (hIocpTemp == NULL)
+		{
+			int nErr = WSAGetLastError();
+			std::cout << "ConnectIOCP() hIocpTemp = " << std::hex << hIocpTemp << "." << std::endl;
+			nRet = closesocket(hClient);
+			std::cout << "closesocket() nRet = " << nRet << "." << std::endl;
+			break;
+		}
+		else
+		{
+			IO_DATA* data = new IO_DATA;
+			std::cout << "new data =  " << data << "." << std::endl;
+			memset(data, 0, sizeof(IO_DATA));
+			data->nBytes = 0;
+			data->opCode = IO_OPERATION::IO_READ;
+			memset(g_buffer, NULL, BUF_SIZE);
+			data->wsaBuf.buf = g_buffer;
+			data->wsaBuf.len = BUF_SIZE;
+			data->client = hClient;
+			DWORD nBytes = BUF_SIZE, dwFlags = 0;
+			int nRet = WSARecv(hClient, &(data->wsaBuf), 1, &nBytes, &dwFlags, &(data->OverLapped), NULL);
+			if (nRet == SOCKET_ERROR)
+			{
+				int nErr = WSAGetLastError();
+				if (ERROR_IO_PENDING != nErr)
+				{
+					std::cout << "WSARecv FAILED! nErr = " << nErr << "." << std::endl;
+					nRet = closesocket(hClient);
+					std::cout << "closesocket() nRet = " << nRet << "." << std::endl;
+					delete data;
+				}
+			}
+		}
+	}
+	nRet = closesocket(hSocket);
+	std::cout << "closesocket() nRet = " << nRet << "." << std::endl;
+	nRet = WSACleanup();
+	std::cout << "WSACleanup() nRet = " << nRet << "." << std::endl;
+	system("pause");
+	return 0;
 }
