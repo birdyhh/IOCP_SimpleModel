@@ -34,8 +34,7 @@ DWORD WINAPI WorkerThread(LPVOID context)
 		void* lpComletionKey = NULL;
 		LPOVERLAPPED lpOverlapped = NULL;
 		BOOL bRet = GetQueuedCompletionStatus(g_hIOCP, &dwIoSize, (PULONG_PTR)&lpComletionKey, (LPOVERLAPPED*)&lpOverlapped, INFINITE);
-		std::cout << "GetQueuedCompletionStatus() bRet= " << bRet;
-		std::cout << ", dwIoSize = " << dwIoSize<< ", Key = " << lpComletionKey << std::endl;
+		std::cout << "GetQueuedCompletionStatus() bRet= " << bRet << ", dwIoSize = " << dwIoSize<< ", Key = " << lpComletionKey << std::endl;
 		IO_DATA* lpIOContext = CONTAINING_RECORD(lpOverlapped, IO_DATA, OverLapped);
 		if (dwIoSize == 0)
 		{
@@ -61,7 +60,7 @@ DWORD WINAPI WorkerThread(LPVOID context)
 			if (nRet == SOCKET_ERROR)
 			{
 				int nErr = WSAGetLastError();
-				if (ERROR_IO_PENDING == nErr)
+				if (ERROR_IO_PENDING != nErr)
 				{
 					std::cout << "WSASend Failed! nErr = " << nErr << "." << std::endl;
 					nRet = closesocket(lpIOContext->client);
@@ -86,7 +85,7 @@ DWORD WINAPI WorkerThread(LPVOID context)
 			if (nRet == SOCKET_ERROR)
 			{
 				int nErr = WSAGetLastError();
-				if (ERROR_IO_PENDING == nErr)
+				if (ERROR_IO_PENDING != nErr)
 				{
 					std::cout << "WSARecv Failed! nErr = " << nErr << "." << std::endl;
 					nRet = closesocket(lpIOContext->client);
